@@ -1,0 +1,30 @@
+Great! Now I want to make the following changes:
+
+1. The glue shell parameter builder will be responsible to decide which partitions will be rewrite by the flow
+
+2. The Step Functions will get the json generated from the parameter builder and start the resize glue job passing the following
+    * It will setup the number of workers and WorkerType
+    * It will send all partitions from the table that need to be resized
+
+3. The Resize job will get the partitions that need to be resized and then will read them, resize them and save into the staging path, which must be in the same path as the original table
+    * The resize job needs to be refactored since it is getting all partitions from glue catalog
+
+4. The step functions need to pass to the comparison_job which partitions it need to compare
+
+5. The comparison job will get the partitions to compare and make the comparison
+
+6. The step function will check if the comparisons are alright
+
+7. The Step functions will then delete all objects in the original table that are small files
+    * For this, I am not sure how the step functions will do the deletions
+    * I am thinking to pass the partitions that need to be deleted
+    * The step functions will need to inform the exact bucket path to delete
+    * It cannot delete the entire bucket, only the objects inside the original table, that are small files
+
+8. The Step Functions will then call the inverse swap job
+    * It was not developed yet
+
+9. The Step Functions will wait more 10 seconds
+
+10. The Step Functions will then delete the staging path
+

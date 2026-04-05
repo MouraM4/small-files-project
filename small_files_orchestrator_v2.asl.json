@@ -1,0 +1,222 @@
+{
+    "Comment": "Small files step function resolving prompt v2 requirements (JSONata)",
+    "QueryLanguage": "JSONata",
+    "StartAt": "GetJobParameters",
+    "States": {
+        "GetJobParameters": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::aws-sdk:s3:getObject",
+            "Arguments": {
+                "Bucket": "{% $states.input.config_bucket %}",
+                "Key": "{% $states.input.config_key %}"
+            },
+            "Output": {
+                "params": "{% $parse($states.result.Body) %}"
+            },
+            "Next": "CheckHasPartitions",
+            "Comment": "Reads parameter builder json configuration"
+        },
+        "CheckHasPartitions": {
+            "Type": "Choice",
+            "Choices": [
+                {
+                    "Condition": "{% $states.input.params.partition_count > 0 %}",
+                    "Next": "SwapGlueJob"
+                }
+            ],
+            "Default": "NoPartitionsToProcess"
+        },
+        "NoPartitionsToProcess": {
+            "Type": "Succeed"
+        },
+        "SwapGlueJob": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::glue:startJobRun.sync",
+            "Arguments": {
+                "JobName": "small_files_comparison",
+                "NumberOfWorkers": "{% $states.input.params.number_of_workers %}",
+                "WorkerType": "G.1X",
+                "Arguments": {
+                    "--CONFIG_PAYLOAD": "{% $states.input.params ~> $string() %}",
+                    "--HOURS_THRESHOLD": "1"
+                }
+            },
+            "Assign": {
+                "SwapJobResult": "{% $states.result %}"
+            },
+            "Next": "Wait3HoursFirst",
+            "Comment": "Resize job reading specific partitions",
+            "Output": {
+                "params": "{% $states.input.params %}"
+            }
+        },
+        "Wait3HoursFirst": {
+            "Type": "Wait",
+            "Seconds": 60,
+            "Next": "ComparisonGlueJob",
+            "Comment": "Wait 3 hours for readers to clear"
+        },
+        "ComparisonGlueJob": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::glue:startJobRun.sync",
+            "Arguments": {
+                "JobName": "small_files_comparison",
+                "Arguments": {
+                    "--CONFIG_PAYLOAD": "{% $states.input.params ~> $string() %}",
+                    "--HOURS_THRESHOLD": "1"
+                }
+            },
+            "Assign": {
+                "ComparisonJobResult": "{% $states.result %}"
+            },
+            "Next": "ChoiceComparisonResult",
+            "Comment": "Compares partition rows and $file_modified_time",
+            "Output": {
+                "params": "{% $states.input.params %}"
+            }
+        },
+        "ChoiceComparisonResult": {
+            "Type": "Choice",
+            "Choices": [
+                {
+                    "Condition": "{% $ComparisonJobResult.JobRunState = 'SUCCEEDED' %}",
+                    "Next": "DeleteOriginalFiles"
+                }
+            ],
+            "Default": "SwapGlueJob",
+            "Comment": "Loop back if comparison failed"
+        },
+        "DeleteOriginalFiles": {
+            "Type": "Map",
+            "Items": "{% [$states.input.params.partitions].$merge([$, {'bucket_name': $states.input.params.bucket_name}]) %}",
+            "ItemProcessor": {
+                "ProcessorConfig": {
+                    "Mode": "INLINE"
+                },
+                "StartAt": "ListOriginalObjects",
+                "States": {
+                    "ListOriginalObjects": {
+                        "Type": "Task",
+                        "Resource": "arn:aws:states:::aws-sdk:s3:listObjectsV2",
+                        "Arguments": {
+                            "Bucket": "{% $states.input.bucket_name %}",
+                            "Prefix": "{% $states.input.s3_path_prefix %}"
+                        },
+                        "Assign": {
+                            "ListResult": "{% $states.result %}"
+                        },
+                        "Next": "CheckObjectsEmpty",
+                        "Output": {
+                            "Bucket": "{% $states.input.bucket_name %}",
+                            "Prefix": "{% $states.input.s3_path_prefix %}"
+                        }
+                    },
+                    "CheckObjectsEmpty": {
+                        "Type": "Choice",
+                        "Choices": [
+                            {
+                                "Condition": "{% $exists($ListResult.Contents[0]) %}",
+                                "Next": "DeleteObjectsCall"
+                            }
+                        ],
+                        "Default": "DeletionEnd"
+                    },
+                    "DeleteObjectsCall": {
+                        "Type": "Task",
+                        "Resource": "arn:aws:states:::aws-sdk:s3:deleteObjects",
+                        "Arguments": {
+                            "Bucket": "{% $states.input.Bucket %}",
+                            "Delete": {
+                                "Objects": "{% $ListResult.Contents.{\"Key\": Key} %}"
+                            }
+                        },
+                        "Next": "DeletionEnd"
+                    },
+                    "DeletionEnd": {
+                        "Type": "Succeed"
+                    }
+                }
+            },
+            "Assign": {
+                "DeletionResults": "{% $states.result %}"
+            },
+            "Next": "InverseSwapGlueJob",
+            "Output": {
+                "params": "{% $states.input.params %}"
+            }
+        },
+        "InverseSwapGlueJob": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::glue:startJobRun.sync",
+            "Arguments": {
+                "JobName": "small_files_comparison",
+                "Arguments": {
+                    "--CONFIG_PAYLOAD": "{% $states.input.params ~> $string() %}",
+                    "--HOURS_THRESHOLD": "1"
+                }
+            },
+            "Assign": {
+                "InverseJobResult": "{% $states.result %}"
+            },
+            "Next": "Wait10Seconds",
+            "Comment": "Copies staging back to original path & updates catalog"
+        },
+        "Wait10Seconds": {
+            "Type": "Wait",
+            "Seconds": 10,
+            "Next": "DeleteStaging"
+        },
+        "DeleteStaging": {
+            "Type": "Map",
+            "Items": "{% $states.input.params.partitions.$merge([$, {'bucket_name': $states.input.params.bucket_name}]) %}",
+            "ItemProcessor": {
+                "ProcessorConfig": {
+                    "Mode": "INLINE"
+                },
+                "StartAt": "ListStagingObjects",
+                "States": {
+                    "ListStagingObjects": {
+                        "Type": "Task",
+                        "Resource": "arn:aws:states:::aws-sdk:s3:listObjectsV2",
+                        "Arguments": {
+                            "Bucket": "{% $states.input.bucket_name %}",
+                            "Prefix": "{% $states.input.staging_s3_path_prefix %}"
+                        },
+                        "Assign": {
+                            "ListStagingResult": "{% $states.result %}"
+                        },
+                        "Next": "CheckStagingEmpty"
+                    },
+                    "CheckStagingEmpty": {
+                        "Type": "Choice",
+                        "Choices": [
+                            {
+                                "Condition": "{% $exists($ListStagingResult.Contents[0]) %}",
+                                "Next": "DeleteStagingObjectsCall"
+                            }
+                        ],
+                        "Default": "StagingDeletionEnd"
+                    },
+                    "DeleteStagingObjectsCall": {
+                        "Type": "Task",
+                        "Resource": "arn:aws:states:::aws-sdk:s3:deleteObjects",
+                        "Arguments": {
+                            "Bucket": "{% $states.input.bucket_name %}",
+                            "Delete": {
+                                "Objects": "{% $ListStagingResult.Contents.{\"Key\": Key} %}"
+                            }
+                        },
+                        "Next": "StagingDeletionEnd"
+                    },
+                    "StagingDeletionEnd": {
+                        "Type": "Succeed"
+                    }
+                }
+            },
+            "Assign": {
+                "StagingDeletionResults": "{% $states.result %}"
+            },
+            "End": true
+        }
+    }
+}

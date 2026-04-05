@@ -1,0 +1,58 @@
+{
+    "Comment": "Step Function (TEST) - Apenas Glue Jobs, sem deleção de objetos S3",
+    "StartAt": "SwapGlueJob",
+    "QueryLanguage": "JSONata",
+    "States": {
+        "SwapGlueJob": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::glue:startJobRun.sync",
+            "Arguments": {
+                "JobName": "temp_cartoesdados_gluejob_resize_files",
+                "Arguments": {
+                    "--TABLE_LIST": "{% $string($states.input.table_list) %}"
+                }
+            },
+            "Next": "FirstWait",
+            "Comment": "Read table with small files, write resized to staging path, update catalog"
+        },
+        "FirstWait": {
+            "Type": "Wait",
+            "Seconds": 10,
+            "Next": "ComparisonGlueJob",
+            "Comment": "Wait 3 hours to ensure no ETL jobs are reading from the old table"
+        },
+        "ComparisonGlueJob": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::glue:startJobRun.sync",
+            "Arguments": {
+                "JobName": "small_filles_comparison"
+            },
+            "Next": "Choice",
+            "Comment": "Compare partition counts and check file_modified_time (no changes in last"
+        },
+        "Choice": {
+            "Type": "Choice",
+            "Choices": [
+                {
+                    "Next": "InverseSwapGlueJob",
+                    "Condition": "{% ($states.input.JobRunState) = (\"SUCCEEDED\") %}"
+                }
+            ],
+            "Default": "SwapGlueJob"
+        },
+        "InverseSwapGlueJob": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::glue:startJobRun.sync",
+            "Arguments": {
+                "JobName": "temp_cartoesdados_gluejob_resize_files"
+            },
+            "Next": "SecondWait",
+            "Comment": "Copy objects from staging to original path and update Glue Catalog partiti"
+        },
+        "SecondWait": {
+            "Type": "Wait",
+            "Seconds": 5,
+            "End": true
+        }
+    }
+}

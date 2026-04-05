@@ -1,2 +1,2 @@
-# small-files-project
+small_files_project
 Project to test small file solution

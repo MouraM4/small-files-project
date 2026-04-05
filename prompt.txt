@@ -1,0 +1,66 @@
+Context: We are having a problem of small files for our tables in data lake in S3. So we are planning to create a step function that will execute a bunch of steps to solve the small files problem.
+
+The architecture and the SF flow should be:
+
+1. Run the Swap Glue job
+   • This glue job will be responsible to read a table with small files
+   • Write the table into a staging bucket path making a resize fixing the small files problem, same bucket, different path
+   • Update data catalog partition pointer to the staging one
+
+2. The SF must wait for three hours
+   • This is necessary since we need to be sure that there is no etl glue jobs or process reading from the old table
+
+3. Execute a glue job comparison
+   • This glue job will be responsible to:
+     • Compare the count of the original table partition and the new staging one
+     • Get the $file_modified_time for the original table and guarantee there is no changes in the last three hours
+   • IF the condition above passed then goes to the next step
+   • If the condition above didn't pass, go to the step 1
+
+4. Delete the original table objects with small files
+
+5. Execute an inverse swap job:
+   • This will copy object from the staging table to the original in the s3 path
+   • Update s3 path in glue catalog for each partition
+
+6. Wait for three hours
+
+7. Delete all objects from the staging bucket
+
+Given this scenario, does the step function "small-file-swap-orchestrator.json" makes sense?
+
+Before the step function, we need to create a glue shell that will define the input parameters for the first swap glue job. It needs to
+
+1. Read the tables with small files partition
+2. Define which partitions will be written by the swap jobs
+3. Get the size of each partition
+4. Define how many workers does the first swap needs
+5. Then it will save this job parameters into a json file and then into a bucket
+
+I was thinking in a json like the one below, does it makes sense?
+
+{
+   "partition1": {
+      "number_of_objects": 1000,
+      "partition_size": 30
+   },
+   "partition2": {
+      "number_of_objects": 1000,
+      "partition_size": 30
+   },
+   },
+   "partition3": {
+      "number_of_objects": 1000,
+      "partition_size": 30
+   },
+   },
+   "average_partition_size": "tamanho_do_job_executor",
+   "number_of_workers": 3
+
+}
+
+Also, consider the following:
+
+We will not create a new table with the swap, we will create a new staging partition inside the same table
+So, update the other jobs and create a new step function v2 considering this
+

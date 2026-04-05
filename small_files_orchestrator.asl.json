@@ -1,0 +1,90 @@
+{
+    "Comment": "A description of my state machine",
+    "StartAt": "GetParametersMetadata",
+    "States": {
+        "GetParametersMetadata": {
+            "Type": "Task",
+            "Arguments": {
+                "Bucket": "MyData",
+                "Key": "MyData"
+            },
+            "Resource": "arn:aws:states:::aws-sdk:s3:getObject",
+            "Next": "Swap Glue Job"
+        },
+        "Swap Glue Job": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::glue:startJobRun",
+            "Arguments": {
+                "JobName": "myJobName"
+            },
+            "Next": "First Wait"
+        },
+        "First Wait": {
+            "Type": "Wait",
+            "Seconds": 5,
+            "Next": "Comparison Glue Job"
+        },
+        "Comparison Glue Job": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::glue:startJobRun",
+            "Arguments": {
+                "JobName": "myJobName"
+            },
+            "Next": "Validation"
+        },
+        "Validation": {
+            "Type": "Choice",
+            "Choices": [
+                {
+                    "Condition": "{% ($states.input.execution) = (\"FAILURE\") %}",
+                    "Next": "Swap Glue Job"
+                }
+            ],
+            "Default": "DeleteSmallFiles"
+        },
+        "DeleteSmallFiles": {
+            "Type": "Task",
+            "Arguments": {
+                "Bucket": "MyData",
+                "Delete": {
+                    "Objects": [
+                        {
+                            "Key": "MyData"
+                        }
+                    ]
+                }
+            },
+            "Resource": "arn:aws:states:::aws-sdk:s3:deleteObjects",
+            "Next": "Inverse Swap Glue Job"
+        },
+        "Inverse Swap Glue Job": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::glue:startJobRun",
+            "Arguments": {
+                "JobName": "myJobName"
+            },
+            "Next": "Second Wait"
+        },
+        "Second Wait": {
+            "Type": "Wait",
+            "Seconds": 5,
+            "Next": "DeleteStagingObjects"
+        },
+        "DeleteStagingObjects": {
+            "Type": "Task",
+            "Arguments": {
+                "Bucket": "MyData",
+                "Delete": {
+                    "Objects": [
+                        {
+                            "Key": "MyData"
+                        }
+                    ]
+                }
+            },
+            "Resource": "arn:aws:states:::aws-sdk:s3:deleteObjects",
+            "End": true
+        }
+    },
+    "QueryLanguage": "JSONata"
+}
