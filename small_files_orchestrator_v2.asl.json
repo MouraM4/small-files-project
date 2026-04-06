@@ -38,7 +38,7 @@
                 "WorkerType": "G.1X",
                 "Arguments": {
                     "--CONFIG_PAYLOAD": "{% $states.input.params ~> $string() %}",
-                    "--HOURS_THRESHOLD": "1"
+                    "--HOURS_THRESHOLD": "0"
                 }
             },
             "Assign": {
@@ -63,7 +63,7 @@
                 "JobName": "small_files_comparison",
                 "Arguments": {
                     "--CONFIG_PAYLOAD": "{% $states.input.params ~> $string() %}",
-                    "--HOURS_THRESHOLD": "1"
+                    "--HOURS_THRESHOLD": "0"
                 }
             },
             "Assign": {
@@ -88,7 +88,7 @@
         },
         "DeleteOriginalFiles": {
             "Type": "Map",
-            "Items": "{% [$states.input.params.partitions].$merge([$, {'bucket_name': $states.input.params.bucket_name}]) %}",
+            "Items": "{% $states.input.params.partitions %}",
             "ItemProcessor": {
                 "ProcessorConfig": {
                     "Mode": "INLINE"
@@ -127,7 +127,7 @@
                         "Arguments": {
                             "Bucket": "{% $states.input.Bucket %}",
                             "Delete": {
-                                "Objects": "{% $ListResult.Contents.{\"Key\": Key} %}"
+                                "Objects": "{% [$ListResult.Contents[*].{\"Key\": Key}] %}"
                             }
                         },
                         "Next": "DeletionEnd"
@@ -140,26 +140,10 @@
             "Assign": {
                 "DeletionResults": "{% $states.result %}"
             },
-            "Next": "InverseSwapGlueJob",
+            "Next": "Wait10Seconds",
             "Output": {
                 "params": "{% $states.input.params %}"
             }
-        },
-        "InverseSwapGlueJob": {
-            "Type": "Task",
-            "Resource": "arn:aws:states:::glue:startJobRun.sync",
-            "Arguments": {
-                "JobName": "small_files_comparison",
-                "Arguments": {
-                    "--CONFIG_PAYLOAD": "{% $states.input.params ~> $string() %}",
-                    "--HOURS_THRESHOLD": "1"
-                }
-            },
-            "Assign": {
-                "InverseJobResult": "{% $states.result %}"
-            },
-            "Next": "Wait10Seconds",
-            "Comment": "Copies staging back to original path & updates catalog"
         },
         "Wait10Seconds": {
             "Type": "Wait",
@@ -168,7 +152,7 @@
         },
         "DeleteStaging": {
             "Type": "Map",
-            "Items": "{% $states.input.params.partitions.$merge([$, {'bucket_name': $states.input.params.bucket_name}]) %}",
+            "Items": "{% $states.input.params.partitions %}",
             "ItemProcessor": {
                 "ProcessorConfig": {
                     "Mode": "INLINE"
@@ -185,7 +169,11 @@
                         "Assign": {
                             "ListStagingResult": "{% $states.result %}"
                         },
-                        "Next": "CheckStagingEmpty"
+                        "Next": "CheckStagingEmpty",
+                        "Output": {
+                            "Bucket": "{% $states.input.bucket_name %}",
+                            "Prefix": "{% $states.input.staging_s3_path_prefix %}"
+                        }
                     },
                     "CheckStagingEmpty": {
                         "Type": "Choice",
@@ -201,9 +189,9 @@
                         "Type": "Task",
                         "Resource": "arn:aws:states:::aws-sdk:s3:deleteObjects",
                         "Arguments": {
-                            "Bucket": "{% $states.input.bucket_name %}",
+                            "Bucket": "{% $states.input.Bucket %}",
                             "Delete": {
-                                "Objects": "{% $ListStagingResult.Contents.{\"Key\": Key} %}"
+                                "Objects": "{% [$ListStagingResult.Contents[*].{\"Key\": Key}] %}"
                             }
                         },
                         "Next": "StagingDeletionEnd"
