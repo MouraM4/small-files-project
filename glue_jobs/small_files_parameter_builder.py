@@ -7,19 +7,11 @@ import boto3
 from awsglue.utils import getResolvedOptions
 
 # Parse job arguments
-args = getResolvedOptions(
-    sys.argv,
-    [
-        "JOB_NAME",
-        "DATABASE_NAME",
-        "TABLE_NAME",
-        "CONFIG_BUCKET",
-        "CONFIG_KEY",
-        "STAGING_PREFIX",
-        "TARGET_FILE_SIZE_MB",
-        "WORKER_CAPACITY_MB",
-    ],
-)
+optional_args = ["TARGET_FILE_SIZE_MB", "WORKER_CAPACITY_MB", "RESIZE_NEEDED", "TARGET_PARTITION"]
+required_args = ["JOB_NAME", "DATABASE_NAME", "TABLE_NAME", "CONFIG_BUCKET", "CONFIG_KEY", "STAGING_PREFIX"]
+args_to_resolve = required_args + [arg for arg in optional_args if f"--{arg}" in sys.argv]
+
+args = getResolvedOptions(sys.argv, args_to_resolve)
 
 DATABASE_NAME = args["DATABASE_NAME"]
 TABLE_NAME = args["TABLE_NAME"]
@@ -28,6 +20,8 @@ CONFIG_KEY = args["CONFIG_KEY"]
 STAGING_PREFIX = args["STAGING_PREFIX"].rstrip("/")
 TARGET_FILE_SIZE_MB = int(args.get("TARGET_FILE_SIZE_MB", "128"))
 WORKER_CAPACITY_MB = int(args.get("WORKER_CAPACITY_MB", "6144"))
+RESIZE_NEEDED = args.get("RESIZE_NEEDED", "true").lower() == "true"
+TARGET_PARTITION = args.get("TARGET_PARTITION")
 
 # Minimum number of workers for the swap job
 MIN_WORKERS = 2
@@ -142,6 +136,10 @@ def main():
         partition_key_str = build_partition_key_string(partition_keys, partition_values)
         bucket, prefix = get_bucket_and_prefix_from_s3_uri(partition_location)
 
+        if TARGET_PARTITION and TARGET_PARTITION not in partition_location and TARGET_PARTITION not in partition_key_str:
+            print(f" Skipping partition: {partition_key_str} (does not match TARGET_PARTITION: {TARGET_PARTITION})")
+            continue
+
         # Ensure prefix ends with / for proper listing
         if prefix and not prefix.endswith("/"):
             prefix += "/"
@@ -153,6 +151,8 @@ def main():
             print(f" -> {stats['number_of_objects']} objects. Skipping (no small files issue).")
             continue
 
+        avg_size = round(stats["partition_size_mb"] / stats["number_of_objects"], 4) if stats["number_of_objects"] > 0 else 0
+
         partitions_config.append({
             "partition_values": partition_values,
             "s3_path": partition_location,
@@ -163,6 +163,8 @@ def main():
             "staging_s3_path_prefix": f"{STAGING_PREFIX}/{TABLE_NAME}/{partition_key_str}/",
             "number_of_objects": stats["number_of_objects"],
             "partition_size_mb": stats["partition_size_mb"],
+            "average_partition_size_mb": avg_size,
+            "resize_needed": RESIZE_NEEDED,
         })
 
         total_size_mb += stats["partition_size_mb"]
@@ -176,24 +178,64 @@ def main():
         #     f"-> Staging partition: {staging_partition_key_str}"
         # )
 
-    # Calculate recommended workers
-    number_of_workers = calculate_number_of_workers(total_size_mb, WORKER_CAPACITY_MB)
+    object_key = f"{CONFIG_KEY}/{TABLE_NAME}/config.json"
+    
+    # Try to load existing config to append new partitions
+    existing_config = None
+    try:
+        response = s3_client.get_object(Bucket=CONFIG_BUCKET, Key=object_key)
+        existing_data = response["Body"].read().decode("utf-8")
+        existing_config = json.loads(existing_data)
+        print(f" Found existing config for {TABLE_NAME}. Appending new configurations.")
+    except Exception as e:
+        print(f" No valid existing config found for {TABLE_NAME} (or could not be read). Starting fresh.")
 
-    # Build final config JSON
-    config = {
-        "database_name": DATABASE_NAME,
-        "table_name": TABLE_NAME,
-        "bucket_name": table_bucket,
-        # "original_prefix": table_prefix.rstrip("/"),
-        "staging_prefix": STAGING_PREFIX,
-        "target_file_size_mb": TARGET_FILE_SIZE_MB,
-        "total_size_mb": round(total_size_mb, 2),
-        "total_objects": total_objects,
-        "number_of_workers": number_of_workers,
-        "partition_count": len(partitions_config),
-        "partitions": partitions_config,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-    }
+    if existing_config and "partitions" in existing_config:
+        # Merge new configurations with existing ones
+        existing_partitions = existing_config.get("partitions", [])
+        
+        # Optionally remove older entries for the same partitions
+        new_partition_keys = {p["staging_partition_key_str"] for p in partitions_config}
+        merged_partitions = [p for p in existing_partitions if p["staging_partition_key_str"] not in new_partition_keys]
+        merged_partitions.extend(partitions_config)
+        
+        # Calculate updated metrics
+        total_size_mb = sum(p["partition_size_mb"] for p in merged_partitions)
+        total_objects = sum(p["number_of_objects"] for p in merged_partitions)
+        number_of_workers_merged = calculate_number_of_workers(total_size_mb, WORKER_CAPACITY_MB)
+        
+        config = {
+            "database_name": DATABASE_NAME,
+            "table_name": TABLE_NAME,
+            "bucket_name": table_bucket,
+            "staging_prefix": STAGING_PREFIX,
+            "target_file_size_mb": TARGET_FILE_SIZE_MB,
+            "total_size_mb": round(total_size_mb, 2),
+            "total_objects": total_objects,
+            "number_of_workers": number_of_workers_merged,
+            "partition_count": len(merged_partitions),
+            "partitions": merged_partitions,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        number_of_workers = number_of_workers_merged
+    else:
+        # Calculate recommended workers for a fresh config
+        number_of_workers = calculate_number_of_workers(total_size_mb, WORKER_CAPACITY_MB)
+
+        # Build fresh config JSON
+        config = {
+            "database_name": DATABASE_NAME,
+            "table_name": TABLE_NAME,
+            "bucket_name": table_bucket,
+            "staging_prefix": STAGING_PREFIX,
+            "target_file_size_mb": TARGET_FILE_SIZE_MB,
+            "total_size_mb": round(total_size_mb, 2),
+            "total_objects": total_objects,
+            "number_of_workers": number_of_workers,
+            "partition_count": len(partitions_config),
+            "partitions": partitions_config,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
 
     config_json = json.dumps(config, indent=2, default=str)
     print(f"\n{'-'*60}")
@@ -202,7 +244,6 @@ def main():
     print(f"{'-'*60}")
 
     # Save config to S3
-    object_key = f"{CONFIG_KEY}/{TABLE_NAME}/config.json"
     s3_client.put_object(
         Bucket=CONFIG_BUCKET,
         Key=object_key,

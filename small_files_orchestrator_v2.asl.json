@@ -10,9 +10,7 @@
                 "Bucket": "{% $states.input.config_bucket %}",
                 "Key": "{% $states.input.config_key %}"
             },
-            "Output": {
-                "params": "{% $parse($states.result.Body) %}"
-            },
+            "Output": "{% $merge([$states.input, {'params': $parse($states.result.Body)}]) %}",
             "Next": "CheckHasPartitions",
             "Comment": "Reads parameter builder json configuration"
         },
@@ -20,35 +18,18 @@
             "Type": "Choice",
             "Choices": [
                 {
+                    "Condition": "{% $states.input.params.partition_count > 0 and $states.input.execution_mode = 'parallel' %}",
+                    "Next": "ParallelResizeMap"
+                },
+                {
                     "Condition": "{% $states.input.params.partition_count > 0 %}",
-                    "Next": "SwapGlueJob"
+                    "Next": "SequentialResizeMap"
                 }
             ],
             "Default": "NoPartitionsToProcess"
         },
         "NoPartitionsToProcess": {
             "Type": "Succeed"
-        },
-        "SwapGlueJob": {
-            "Type": "Task",
-            "Resource": "arn:aws:states:::glue:startJobRun.sync",
-            "Arguments": {
-                "JobName": "small_files_comparison",
-                "NumberOfWorkers": "{% $states.input.params.number_of_workers %}",
-                "WorkerType": "G.1X",
-                "Arguments": {
-                    "--CONFIG_PAYLOAD": "{% $states.input.params ~> $string() %}",
-                    "--HOURS_THRESHOLD": "0"
-                }
-            },
-            "Assign": {
-                "SwapJobResult": "{% $states.result %}"
-            },
-            "Next": "Wait3HoursFirst",
-            "Comment": "Resize job reading specific partitions",
-            "Output": {
-                "params": "{% $states.input.params %}"
-            }
         },
         "Wait3HoursFirst": {
             "Type": "Wait",
@@ -83,7 +64,7 @@
                     "Next": "DeleteOriginalFiles"
                 }
             ],
-            "Default": "SwapGlueJob",
+            "Default": "CheckHasPartitions",
             "Comment": "Loop back if comparison failed"
         },
         "DeleteOriginalFiles": {
@@ -100,7 +81,7 @@
                         "Resource": "arn:aws:states:::aws-sdk:s3:listObjectsV2",
                         "Arguments": {
                             "Bucket": "{% $states.input.bucket_name %}",
-                            "Prefix": "{% $states.input.s3_path_prefix %}"
+                            "Prefix": "{% $states.input.partition.s3_path_prefix %}"
                         },
                         "Assign": {
                             "ListResult": "{% $states.result %}"
@@ -141,8 +122,10 @@
                 "DeletionResults": "{% $states.result %}"
             },
             "Next": "Wait10Seconds",
-            "Output": {
-                "params": "{% $states.input.params %}"
+            "Output": "{% $merge([$states.input, {'params': $states.input.params}]) %}",
+            "ItemSelector": {
+                "partition": "{% $states.context.Map.Item.Value %}",
+                "bucket_name": "{% $states.input.params.bucket_name %}"
             }
         },
         "Wait10Seconds": {
@@ -164,7 +147,7 @@
                         "Resource": "arn:aws:states:::aws-sdk:s3:listObjectsV2",
                         "Arguments": {
                             "Bucket": "{% $states.input.bucket_name %}",
-                            "Prefix": "{% $states.input.staging_s3_path_prefix %}"
+                            "Prefix": "{% $states.input.partition.staging_s3_path_prefix %}"
                         },
                         "Assign": {
                             "ListStagingResult": "{% $states.result %}"
@@ -204,7 +187,84 @@
             "Assign": {
                 "StagingDeletionResults": "{% $states.result %}"
             },
-            "End": true
+            "End": true,
+            "ItemSelector": {
+                "partition": "{% $states.context.Map.Item.Value %}",
+                "bucket_name": "{% $states.input.params.bucket_name %}"
+            }
+        },
+        "ParallelResizeMap": {
+            "Type": "Map",
+            "Items": "{% $states.input.params.partitions %}",
+            "ItemSelector": {
+                "partition": "{% $states.context.Map.Item.Value %}",
+                "params": "{% $states.input.params %}"
+            },
+            "ItemProcessor": {
+                "ProcessorConfig": {
+                    "Mode": "INLINE"
+                },
+                "StartAt": "RunResizeJob_Parallel",
+                "States": {
+                    "RunResizeJob_Parallel": {
+                        "Type": "Task",
+                        "Resource": "arn:aws:states:::glue:startJobRun.sync",
+                        "Arguments": {
+                            "JobName": "small_files_resize",
+                            "NumberOfWorkers": "{% $states.input.params.number_of_workers %}",
+                            "WorkerType": "G.1X",
+                            "Arguments": {
+                                "--CONFIG_PAYLOAD": "{% $merge([$states.input.params, {\"partitions\": [$states.input.partition]}]) ~> $string() %}",
+                                "--HOURS_THRESHOLD": "0"
+                            }
+                        },
+                        "End": true
+                    }
+                }
+            },
+            "Assign": {
+                "SwapJobResult": "{% $states.result %}"
+            },
+            "Next": "Wait3HoursFirst",
+            "Comment": "Resize job reading specific partitions in parallel",
+            "Output": "{% $merge([$states.input, {'params': $states.input.params}]) %}"
+        },
+        "SequentialResizeMap": {
+            "Type": "Map",
+            "Items": "{% $states.input.params.partitions %}",
+            "ItemSelector": {
+                "partition": "{% $states.context.Map.Item.Value %}",
+                "params": "{% $states.input.params %}"
+            },
+            "ItemProcessor": {
+                "ProcessorConfig": {
+                    "Mode": "INLINE"
+                },
+                "StartAt": "RunResizeJob_Sequential",
+                "States": {
+                    "RunResizeJob_Sequential": {
+                        "Type": "Task",
+                        "Resource": "arn:aws:states:::glue:startJobRun.sync",
+                        "Arguments": {
+                            "JobName": "small_files_resize",
+                            "NumberOfWorkers": "{% $states.input.params.number_of_workers %}",
+                            "WorkerType": "G.1X",
+                            "Arguments": {
+                                "--CONFIG_PAYLOAD": "{% $merge([$states.input.params, {\"partitions\": [$states.input.partition]}]) ~> $string() %}",
+                                "--HOURS_THRESHOLD": "0"
+                            }
+                        },
+                        "End": true
+                    }
+                }
+            },
+            "Assign": {
+                "SwapJobResult": "{% $states.result %}"
+            },
+            "Next": "Wait3HoursFirst",
+            "Comment": "Resize job reading specific partitions sequentially",
+            "Output": "{% $merge([$states.input, {'params': $states.input.params}]) %}",
+            "MaxConcurrency": 1
         }
     }
 }
