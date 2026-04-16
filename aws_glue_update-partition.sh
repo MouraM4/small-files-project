@@ -5,7 +5,7 @@ aws glue update-partition \
     --partition-input '{
         "Values": ["2025", "01"],
         "StorageDescriptor": {
-            "Location": "s3://sot-layer/temp_resized_tables/my_test_table/year=2025/month=01/",
+            "Location": "s3://sot-layer/my_test_table/year=2025/month=01/",
             "InputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat",
             "OutputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat",
             "SerdeInfo": {
