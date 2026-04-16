@@ -1,0 +1,78 @@
+[
+  {
+    "comment": "1. Basic Execution: Process all partitions with default settings.",
+    "arguments": {
+      "--JOB_NAME": "small-files-parameter-builder",
+      "--DATABASE_NAME": "your_database",
+      "--TABLE_NAME": "your_table",
+      "--CONFIG_BUCKET": "your-config-bucket",
+      "--CONFIG_KEY": "path/to/your/configs",
+      "--STAGING_PREFIX": "staging"
+    }
+  },
+  {
+    "comment": "2. Target a Specific Partition: Process only a single, specific partition.",
+    "arguments": {
+      "--JOB_NAME": "small-files-parameter-builder",
+      "--DATABASE_NAME": "your_database",
+      "--TABLE_NAME": "your_table",
+      "--CONFIG_BUCKET": "your-config-bucket",
+      "--CONFIG_KEY": "path/to/your/configs",
+      "--STAGING_PREFIX": "staging",
+      "--TARGET_PARTITION": "year=2026/month=04/day=15"
+    }
+  },
+  {
+    "comment": "3. Target a Range of Partitions: Process all partitions within a specified range.",
+    "arguments": {
+      "--JOB_NAME": "small-files-parameter-builder",
+      "--DATABASE_NAME": "your_database",
+      "--TABLE_NAME": "your_table",
+      "--CONFIG_BUCKET": "your-config-bucket",
+      "--CONFIG_KEY": "path/to/your/configs",
+      "--STAGING_PREFIX": "staging",
+      "--INIT_PARTITION": "year=2026/month=03/day=01",
+      "--ENDING_PARTITION": "year=2026/month=03/day=31"
+    }
+  },
+  {
+    "comment": "4. Custom Sizing: Process all partitions with custom target file size and worker capacity.",
+    "arguments": {
+      "--JOB_NAME": "small-files-parameter-builder",
+      "--DATABASE_NAME": "your_database",
+      "--TABLE_NAME": "your_table",
+      "--CONFIG_BUCKET": "your-config-bucket",
+      "--CONFIG_KEY": "path/to/your/configs",
+      "--STAGING_PREFIX": "staging",
+      "--TARGET_FILE_SIZE_MB": "256",
+      "--WORKER_CAPACITY_MB": "8192"
+    }
+  },
+  {
+    "comment": "5. Analysis Only (No Resize): Analyze partitions but mark them as not needing a resize. Useful for a dry run.",
+    "arguments": {
+      "--JOB_NAME": "small-files-parameter-builder",
+      "--DATABASE_NAME": "your_database",
+      "--TABLE_NAME": "your_table",
+      "--CONFIG_BUCKET": "your-config-bucket",
+      "--CONFIG_KEY": "path/to/your/configs",
+      "--STAGING_PREFIX": "staging",
+      "--RESIZE_NEEDED": "false"
+    }
+  },
+  {
+    "comment": "6. Complex Scenario: Process a specific range of partitions with custom sizing options.",
+    "arguments": {
+      "--JOB_NAME": "small-files-parameter-builder",
+      "--DATABASE_NAME": "your_database",
+      "--TABLE_NAME": "your_table",
+      "--CONFIG_BUCKET": "your-config-bucket",
+      "--CONFIG_KEY": "path/to/your/configs",
+      "--STAGING_PREFIX": "staging",
+      "--INIT_PARTITION": "year=2026/month=01/day=01",
+      "--ENDING_PARTITION": "year=2026/month=01/day=31",
+      "--TARGET_FILE_SIZE_MB": "512",
+      "--WORKER_CAPACITY_MB": "4096"
+    }
+  }
+]

@@ -12,6 +12,8 @@ optional_args = [
     "WORKER_CAPACITY_MB",
     "RESIZE_NEEDED",
     "TARGET_PARTITION",
+    "INIT_PARTITION",
+    "ENDING_PARTITION",
 ]
 required_args = [
     "JOB_NAME",
@@ -36,6 +38,8 @@ TARGET_FILE_SIZE_MB = int(args.get("TARGET_FILE_SIZE_MB", "128"))
 WORKER_CAPACITY_MB = int(args.get("WORKER_CAPACITY_MB", "6144"))
 RESIZE_NEEDED = args.get("RESIZE_NEEDED", "true").lower() == "true"
 TARGET_PARTITION = args.get("TARGET_PARTITION")
+INIT_PARTITION = args.get("INIT_PARTITION")
+ENDING_PARTITION = args.get("ENDING_PARTITION")
 
 # Minimum number of workers for the swap job
 MIN_WORKERS = 2
@@ -133,6 +137,10 @@ def main():
     # Get all partitions
     partitions = get_all_partitions(DATABASE_NAME, TABLE_NAME)
 
+    # Sort partitions based on their values to enable range filtering
+    if partition_keys:
+        partitions.sort(key=lambda p: p["Values"])
+
     if not partitions:
         print(" No partitions found. Nothing to process.")
         return
@@ -151,6 +159,16 @@ def main():
         partition_location = partition["StorageDescriptor"]["Location"]
         partition_key_str = build_partition_key_string(partition_keys, partition_values)
         bucket, prefix = get_bucket_and_prefix_from_s3_uri(partition_location)
+
+        if (
+            INIT_PARTITION
+            and ENDING_PARTITION
+            and not (INIT_PARTITION <= partition_key_str <= ENDING_PARTITION)
+        ):
+            print(
+                f" Skipping partition: {partition_key_str} (not in range [{INIT_PARTITION}, {ENDING_PARTITION}])"
+            )
+            continue
 
         if (
             TARGET_PARTITION

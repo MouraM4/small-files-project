@@ -1,0 +1,36 @@
+[
+  {
+    "comment": "1. Run with the latest config, in parallel",
+    "input": {
+      "config_bucket": "your-config-bucket",
+      "config_key": "path/to/your/configs/",
+      "execution_mode": 0
+    }
+  },
+  {
+    "comment": "2. Run with the latest config, sequentially",
+    "input": {
+      "config_bucket": "your-config-bucket",
+      "config_key": "path/to/your/configs/",
+      "execution_mode": 1
+    }
+  },
+  {
+    "comment": "3. Run with a specific config, in parallel",
+    "input": {
+      "config_bucket": "your-config-bucket",
+      "config_key": "path/to/your/configs/config_2026-04-16_01-42-16.json",
+      "config_file_name": "config_2026-04-16_01-42-16.json",
+      "execution_mode": 0
+    }
+  },
+  {
+    "comment": "4. Run with a specific config, sequentially",
+    "input": {
+      "config_bucket": "your-config-bucket",
+      "config_key": "path/to/your/configs/config_2026-04-16_01-42-16.json",
+      "config_file_name": "config_2026-04-16_01-42-16.json",
+      "execution_mode": 1
+    }
+  }
+]
