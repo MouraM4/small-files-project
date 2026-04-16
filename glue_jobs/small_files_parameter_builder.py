@@ -213,7 +213,9 @@ def main():
         #     f"-> Staging partition: {staging_partition_key_str}"
         # )
 
+    average_total_size = round(total_size_mb / len(partitions_config), 2) if partitions_config else 0
     number_of_workers = calculate_number_of_workers(total_size_mb, WORKER_CAPACITY_MB)
+    average_number_of_workers = calculate_number_of_workers(average_total_size, WORKER_CAPACITY_MB)
 
     config = {
         "database_name": DATABASE_NAME,
@@ -227,6 +229,7 @@ def main():
         "partition_count": len(partitions_config),
         "partitions": partitions_config,
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        "average_number_of_workers": average_number_of_workers,
     }
 
     config_json = json.dumps(config, indent=2, default=str)
