@@ -1,0 +1,206 @@
+{
+  "Comment": "Small files step function resolving prompt v2 requirements",
+  "StartAt": "ConfigProvided?",
+  "States": {
+    "ConfigProvided?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.config_file_name",
+          "IsPresent": true,
+          "Next": "GetJobParameters"
+        }
+      ],
+      "Default": "FindLatestConfig"
+    },
+    "FindLatestConfig": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:s3:listObjectsV2",
+      "Parameters": {
+        "Bucket.$": "$.config_bucket",
+        "Prefix.$": "$.config_key"
+      },
+      "ResultPath": "$.ListResults",
+      "Next": "GetLastConfigFile"
+    },
+    "GetLastConfigFile": {
+      "Type": "Pass",
+      "Parameters": {
+        "config_file_name.$": "$.ListResults.Contents[-1:].Key"
+      },
+      "ResultPath": "$.config_key",
+      "Next": "GetJobParameters"
+    },
+    "GetJobParameters": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:s3:getObject",
+      "Parameters": {
+        "Bucket.$": "$.config_bucket",
+                  "Key.$": "$.config_key.config_file_name[0]"
+      },
+      "ResultSelector": {
+        "Payload.$": "States.StringToJson($.Body)"
+      },
+      "ResultPath": "$.ConfigPayload",
+      "Next": "CheckHasPartitions"
+    },
+    "CheckHasPartitions": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.ConfigPayload.Payload.partition_count",
+          "NumericGreaterThan": 0,
+          "Next": "ProcessPartitions"
+        }
+      ],
+      "Default": "NoPartitionsToProcess"
+    },
+    "NoPartitionsToProcess": {
+      "Type": "Succeed"
+    },
+    "ProcessPartitions": {
+      "Type": "Map",
+      "ItemsPath": "$.ConfigPayload.Payload.partitions",
+      "ItemSelector": {
+        "partition.$": "$$.Map.Item.Value",
+        "params.$": "$.ConfigPayload.Payload"
+      },
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "INLINE"
+        },
+        "StartAt": "RunResizeJob",
+        "States": {
+          "RunResizeJob": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::glue:startJobRun.sync",
+            "Parameters": {
+              "JobName": "small_files_resize",
+              "NumberOfWorkers.$": "$.partition.number_of_workers_partition_level",
+              "WorkerType": "G.1X",
+              "Arguments": {
+                "--CONFIG_PAYLOAD.$": "States.JsonToString($)",
+                "--HOURS_THRESHOLD": "0"
+              }
+            },
+            "Next": "Wait3HoursFirst"
+          },
+          "Wait3HoursFirst": {
+            "Type": "Wait",
+            "Seconds": 10,
+            "Next": "ComparisonGlueJob"
+          },
+          "ComparisonGlueJob": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::glue:startJobRun.sync",
+            "Parameters": {
+              "JobName": "small_files_comparison",
+              "Arguments": {
+                "--CONFIG_PAYLOAD.$": "States.JsonToString($)",
+                "--HOURS_THRESHOLD": "0"
+              }
+            },
+            "ResultPath": "$.ComparisonJobResult",
+            "Next": "ChoiceComparisonResult"
+          },
+          "ChoiceComparisonResult": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "Variable": "$.ComparisonJobResult.JobRunState",
+                "StringEquals": "SUCCEEDED",
+                "Next": "DeleteOriginalFiles"
+              }
+            ],
+            "Default": "RunResizeJob"
+          },
+          "DeleteOriginalFiles": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::aws-sdk:s3:listObjectsV2",
+            "Parameters": {
+              "Bucket.$": "$.params.bucket_name",
+              "Prefix.$": "$.partition.s3_path_prefix"
+            },
+            "ResultPath": "$.ListResult",
+            "Next": "CheckObjectsEmpty"
+          },
+          "CheckObjectsEmpty": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "Variable": "$.ListResult.Contents[0]",
+                "IsPresent": true,
+                "Next": "DeleteObjectsCall"
+              }
+            ],
+            "Default": "InverseSwapJob"
+          },
+          "DeleteObjectsCall": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::aws-sdk:s3:deleteObjects",
+            "Parameters": {
+              "Bucket.$": "$.params.bucket_name",
+              "Delete": {
+                "Objects.$": "$.ListResult.Contents"
+              }
+            },
+            "Next": "InverseSwapJob"
+          },
+          "InverseSwapJob": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::glue:startJobRun.sync",
+            "Parameters": {
+              "JobName": "small_files_inverse_swap",
+              "Arguments": {
+                "--CONFIG_PAYLOAD.$": "States.JsonToString($)"
+              }
+            },
+            "Next": "Wait10Seconds"
+          },
+          "Wait10Seconds": {
+            "Type": "Wait",
+            "Seconds": 10,
+            "Next": "DeleteStaging"
+          },
+          "DeleteStaging": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::aws-sdk:s3:listObjectsV2",
+            "Parameters": {
+              "Bucket.$": "$.params.bucket_name",
+              "Prefix.$": "$.partition.staging_s3_path_prefix"
+            },
+            "ResultPath": "$.ListStagingResult",
+            "Next": "CheckStagingEmpty"
+          },
+          "CheckStagingEmpty": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "Variable": "$.ListStagingResult.Contents[0]",
+                "IsPresent": true,
+                "Next": "DeleteStagingObjectsCall"
+              }
+            ],
+            "Default": "PartitionDone"
+          },
+          "DeleteStagingObjectsCall": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::aws-sdk:s3:deleteObjects",
+            "Parameters": {
+              "Bucket.$": "$.params.bucket_name",
+              "Delete": {
+                "Objects.$": "$.ListStagingResult.Contents"
+              }
+            },
+            "Next": "PartitionDone"
+          },
+          "PartitionDone": {
+            "Type": "Succeed"
+          }
+        }
+      },
+      "End": true,
+      "MaxConcurrency": 1
+    }
+  }
+}

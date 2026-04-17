@@ -17,7 +17,6 @@ args = getResolvedOptions(
     [
         "JOB_NAME",
         "CONFIG_PAYLOAD",
-        "TARGET_FILE_SIZE_MB",
     ],
 )
 
@@ -32,11 +31,12 @@ job.init(args["JOB_NAME"], args)
 print("DEFINE SPARK CONTEXT")
 
 config_payload = json.loads(args["CONFIG_PAYLOAD"])
-DATABASE_NAME = config_payload["database_name"]
-TABLE_NAME = config_payload["table_name"]
-TARGET_FILE_SIZE_MB = int(
-    args.get("TARGET_FILE_SIZE_MB") or config_payload.get("target_file_size_mb", "128")
-)
+params = config_payload.get("params", {})
+partition_info = config_payload.get("partition", {})
+
+DATABASE_NAME = params["database_name"]
+TABLE_NAME = params["table_name"]
+TARGET_FILE_SIZE_MB = int(params.get("target_file_size_mb", "128"))
 
 glue_client = boto3.client("glue")
 s3_client = boto3.client("s3")
@@ -138,82 +138,80 @@ def main():
     print(f"  Partition keys : {partition_keys}")
     print(f"  Output format  : {output_format}")
 
-    partitions = config_payload.get("partitions", [])
-
-    if not partitions:
-        print("No partitions to process. Exiting.")
+    if not partition_info:
+        print("No partition to process. Exiting.")
         job.commit()
         return
 
-    print(f"  Partitions to resize: {len(partitions)}")
+    print(f"  Partition to resize: {partition_info.get('staging_partition_key_str')}")
 
     failed_partitions = []
 
-    for part_info in partitions:
-        partition_values = part_info["partition_values"]
-        partition_key_str = part_info["staging_partition_key_str"]
-        original_s3_path = part_info["s3_path"]
-        staging_s3_path = part_info["staging_s3_path"]
-        partition_size_mb = part_info.get("partition_size_mb", 0)
-        number_of_objects = part_info.get("number_of_objects", 0)
+    partition_values = partition_info["partition_values"]
+    partition_key_str = partition_info["staging_partition_key_str"]
+    original_s3_path = partition_info["s3_path"]
+    staging_s3_path = partition_info["staging_s3_path"]
+    partition_size_mb = partition_info.get("partition_size_mb", 0)
+    number_of_objects = partition_info.get("number_of_objects", 0)
 
-        print(f"\n  Processing partition: {partition_key_str}")
-        print(f"    Original path  : {original_s3_path}")
-        print(f"    Staging path   : {staging_s3_path}")
-        print(f"    Current files  : {number_of_objects}")
-        print(f"    Partition size : {partition_size_mb} MB")
+    print(f"\n  Processing partition: {partition_key_str}")
+    print(f"    Original path  : {original_s3_path}")
+    print(f"    Staging path   : {staging_s3_path}")
+    print(f"    Current files  : {number_of_objects}")
+    print(f"    Partition size : {partition_size_mb} MB")
 
-        try:
-            # --- Read the partition ---
-            df = spark.read.format(output_format).load(original_s3_path)
-            original_count = df.count()
-            print(f"    Row count      : {original_count}")
+    try:
+        # --- Read the partition ---
+        df = spark.read.format(output_format).load(original_s3_path)
+        original_count = df.count()
+        print(f"    Row count      : {original_count}")
 
-            if original_count == 0:
-                print("    WARNING: Partition is empty. Skipping.")
-                continue
+        if original_count == 0:
+            print("    WARNING: Partition is empty. Skipping.")
+            job.commit()
+            return
 
-            # --- Calculate target number of output files ---
-            num_output_files = calculate_num_output_files(
-                partition_size_mb, TARGET_FILE_SIZE_MB
-            )
-            print(f"    Target files   : {num_output_files}")
+        # --- Calculate target number of output files ---
+        num_output_files = calculate_num_output_files(
+            partition_size_mb, TARGET_FILE_SIZE_MB
+        )
+        print(f"    Target files   : {num_output_files}")
 
-            # --- Coalesce and write to staging ---
-            # coalesce avoids a full shuffle; use repartition if data is very skewed.
-            resized_df = df.coalesce(num_output_files)
+        # --- Coalesce and write to staging ---
+        # coalesce avoids a full shuffle; use repartition if data is very skewed.
+        resized_df = df.coalesce(num_output_files)
 
-            (
-                resized_df.write.format(output_format)
-                .mode("overwrite")
-                .save(staging_s3_path)
-            )
+        (
+            resized_df.write.format(output_format)
+            .mode("overwrite")
+            .save(staging_s3_path)
+        )
 
-            # --- Validate staging write ---
-            staging_df = spark.read.format(output_format).load(staging_s3_path)
-            staging_count = staging_df.count()
-            print(f"    Staging count  : {staging_count}")
+        # --- Validate staging write ---
+        staging_df = spark.read.format(output_format).load(staging_s3_path)
+        staging_count = staging_df.count()
+        print(f"    Staging count  : {staging_count}")
 
-            if staging_count != original_count:
-                raise ValueError(
-                    f"Row count mismatch after write: "
-                    f"original={original_count}, staging={staging_count}"
-                )
-
-            # --- Update Glue Catalog partition pointer to staging ---
-            update_partition_location(
-                DATABASE_NAME,
-                TABLE_NAME,
-                partition_values,
-                staging_s3_path,
-                table_info,
+        if staging_count != original_count:
+            raise ValueError(
+                f"Row count mismatch after write: "
+                f"original={original_count}, staging={staging_count}"
             )
 
-            print(f"    PASS: Partition {partition_key_str} resized and catalog updated.")
+        # --- Update Glue Catalog partition pointer to staging ---
+        update_partition_location(
+            DATABASE_NAME,
+            TABLE_NAME,
+            partition_values,
+            staging_s3_path,
+            table_info,
+        )
 
-        except Exception as e:
-            print(f"    ERROR processing partition {partition_key_str}: {e}")
-            failed_partitions.append(partition_key_str)
+        print(f"    PASS: Partition {partition_key_str} resized and catalog updated.")
+
+    except Exception as e:
+        print(f"    ERROR processing partition {partition_key_str}: {e}")
+        failed_partitions.append(partition_key_str)
 
     if failed_partitions:
         raise Exception(
