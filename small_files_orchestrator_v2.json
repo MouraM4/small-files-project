@@ -83,6 +83,7 @@
                 "--HOURS_THRESHOLD": "0"
               }
             },
+            "ResultPath": "$.ResizeJobResult",
             "Next": "Wait3HoursFirst"
           },
           "Wait3HoursFirst": {
@@ -97,7 +98,7 @@
               "JobName": "small_files_comparison",
               "Arguments": {
                 "--HOURS_THRESHOLD": "0",
-                "--CONFIG_PAYLOAD.$": "$.Arguments['--CONFIG_PAYLOAD']"
+                "--CONFIG_PAYLOAD.$": "States.JsonToString($)"
               }
             },
             "ResultPath": "$.ComparisonJobResult",
@@ -121,6 +122,9 @@
               "Bucket.$": "$.params.bucket_name",
               "Prefix.$": "$.partition.s3_path_prefix"
             },
+            "ResultSelector": {
+              "ListResult.$": "$.Contents"
+            },
             "ResultPath": "$.ListResult",
             "Next": "CheckObjectsEmpty"
           },
@@ -128,7 +132,7 @@
             "Type": "Choice",
             "Choices": [
               {
-                "Variable": "$.ListResult.Contents[0]",
+                "Variable": "$.ListResult.ListResult[0]",
                 "IsPresent": true,
                 "Next": "DeleteObjectsCall"
               }
@@ -141,7 +145,7 @@
             "Parameters": {
               "Bucket.$": "$.params.bucket_name",
               "Delete": {
-                "Objects.$": "$.ListResult.Contents"
+                "Objects.$": "$.ListResult.ListResult"
               }
             },
             "Next": "InverseSwapJob"

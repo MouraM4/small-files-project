@@ -93,76 +93,77 @@ def main():
     print("DATABASE NAME: ", DATABASE_NAME)
     print("TABLE NAME: ", TABLE_NAME)
 
-    partitions = config_payload.get("partitions", [])
+    # partitions = config_payload.get("partitions", [])
 
-    if not partitions:
-        print(f"No partitions defined dynamically for {DATABASE_NAME}.{TABLE_NAME}.")
+    # if not partitions:
+    #     print(f"No partitions defined dynamically for {DATABASE_NAME}.{TABLE_NAME}.")
+    #     comparison_passed = False
+
+    # print(
+    #     f"Comparing {len(partitions)} partitions for "
+    #     f"{DATABASE_NAME}.{TABLE_NAME}"
+    # )
+
+    part_info = config_payload.get("partition", {})
+
+    if not part_info:
+        print(f"No partition information found in config payload.")
         comparison_passed = False
-        return comparison_passed
+
+    # for part_info in partitions:
+    partition_key_str = part_info["staging_partition_key_str"]
+    staging_s3_path = part_info["staging_s3_path"]
+    original_location = part_info["s3_path"]
+    original_s3_prefix = part_info["s3_path_prefix"]
+    
+    print(f" Partition {partition_key_str}:")
+
+    # -- Check 1: Row count comparison
+    # The staging location is where the catalog currently points after swap, but we can verify explicitly
+    staging_count = count_rows_at_location(staging_s3_path)
+
+    # Read from the original location to compare
+    original_count = count_rows_at_location(original_location)
 
     print(
-        f"Comparing {len(partitions)} partitions for "
-        f"{DATABASE_NAME}.{TABLE_NAME}"
+        f" Row count - Original: {original_count}, "
+        f"Staging: {staging_count}"
     )
 
-    for part_info in partitions:
-        partition_values = part_info["partition_values"]
-        partition_key_str = part_info["staging_partition_key_str"]
-        staging_s3_path = part_info["staging_s3_path"]
-        original_location = part_info["s3_path"]
-        original_s3_prefix = part_info["s3_path_prefix"]
-        
-        print(f" Partition {partition_key_str}:")
+    if original_count < 0 or staging_count < 0:
+        print(" FAIL: Could not read one or both locations.")
+        comparison_passed = False
 
-        # -- Check 1: Row count comparison
-        # The staging location is where the catalog currently points after swap, but we can verify explicitly
-        staging_count = count_rows_at_location(staging_s3_path)
-
-        # Read from the original location to compare
-        original_count = count_rows_at_location(original_location)
-
+    if original_count != staging_count:
         print(
-            f" Row count - Original: {original_count}, "
-            f"Staging: {staging_count}"
+            f" FAIL: Row count mismatch "
+            f"(original={original_count}, staging={staging_count})"
         )
+        comparison_passed = False
 
-        if original_count < 0 or staging_count < 0:
-            print(" FAIL: Could not read one or both locations.")
-            comparison_passed = False
-            break
+    # -- Check 2: File modification time comparison
+    latest_modified = get_latest_modified_time(
+        BUCKET_NAME, original_s3_prefix
+    )
 
-        if original_count != staging_count:
+    if latest_modified is not None:
+        print(f"  Latest file modification: {latest_modified.isoformat()}")
+        if latest_modified > threshold_time:
             print(
-                f" FAIL: Row count mismatch "
-                f"(original={original_count}, staging={staging_count})"
+                f"  FAIL: Files were modified after threshold "
+                f"({threshold_time.isoformat()}). "
+                f"Another process may have written to the original path."
             )
             comparison_passed = False
-            break
-
-        # -- Check 2: File modification time comparison
-        latest_modified = get_latest_modified_time(
-            BUCKET_NAME, original_s3_prefix
-        )
-
-        if latest_modified is not None:
-            print(f"  Latest file modification: {latest_modified.isoformat()}")
-            if latest_modified > threshold_time:
-                print(
-                    f"  FAIL: Files were modified after threshold "
-                    f"({threshold_time.isoformat()}). "
-                    f"Another process may have written to the original path."
-                )
-                comparison_passed = False
-                break
-            else:
-                print(
-                    f"  PASS: No modifications since {threshold_time.isoformat()}"
-                )
         else:
             print(
-                f"  WARNING: No objects found at original prefix "
-                f"{original_s3_prefix}. Treating as passed."
+                f"  PASS: No modifications since {threshold_time.isoformat()}"
             )
+    else:
+        print(
+            f"  WARNING: No objects found at original prefix "
+            f"{original_s3_prefix}. Treating as passed."
+        )
 
         print(f"  PASS: Partition {partition_key_str} validated.")
 
