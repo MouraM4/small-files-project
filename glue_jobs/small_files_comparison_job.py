@@ -25,14 +25,13 @@ sc = SparkContext()
 glue_context = GlueContext(sc)
 spark = glue_context.spark_session
 job = Job(glue_context)
-job.init(args["JOB_NAME"], args)
 
 print("DEFINE SPARK CONTEXT")
 
 config_payload = json.loads(args["CONFIG_PAYLOAD"])
-DATABASE_NAME = config_payload["database_name"]
-TABLE_NAME = config_payload["table_name"]
-BUCKET_NAME = config_payload["bucket_name"]
+DATABASE_NAME = config_payload["params"]["database_name"]
+TABLE_NAME = config_payload["params"]["table_name"]
+BUCKET_NAME = config_payload["params"]["bucket_name"]
 HOURS_THRESHOLD = int(args.get("hours_threshold", "3"))
 
 s3_client = boto3.client("s3")
@@ -183,3 +182,4 @@ if __name__ == "__main__":
         main()
     except Exception as err:
         print("ERROR:", err)
+        raise err

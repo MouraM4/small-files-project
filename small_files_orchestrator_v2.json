@@ -36,7 +36,7 @@
       "Resource": "arn:aws:states:::aws-sdk:s3:getObject",
       "Parameters": {
         "Bucket.$": "$.config_bucket",
-                  "Key.$": "$.config_key.config_file_name[0]"
+        "Key.$": "$.config_key.config_file_name[0]"
       },
       "ResultSelector": {
         "Payload.$": "States.StringToJson($.Body)"
@@ -75,7 +75,7 @@
             "Type": "Task",
             "Resource": "arn:aws:states:::glue:startJobRun.sync",
             "Parameters": {
-              "JobName": "small_files_resize",
+              "JobName": "small_files_resize_job",
               "NumberOfWorkers.$": "$.partition.number_of_workers_partition_level",
               "WorkerType": "G.1X",
               "Arguments": {
@@ -96,8 +96,8 @@
             "Parameters": {
               "JobName": "small_files_comparison",
               "Arguments": {
-                "--CONFIG_PAYLOAD.$": "States.JsonToString($)",
-                "--HOURS_THRESHOLD": "0"
+                "--HOURS_THRESHOLD": "0",
+                "--CONFIG_PAYLOAD.$": "$.Arguments['--CONFIG_PAYLOAD']"
               }
             },
             "ResultPath": "$.ComparisonJobResult",
