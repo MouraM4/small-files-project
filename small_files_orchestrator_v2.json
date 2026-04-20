@@ -110,93 +110,88 @@
               {
                 "Variable": "$.ComparisonJobResult.JobRunState",
                 "StringEquals": "SUCCEEDED",
-                "Next": "DeleteOriginalFiles"
+                "Next": "ListOriginalObjects"
               }
             ],
             "Default": "RunResizeJob"
           },
-          "DeleteOriginalFiles": {
+          "ListOriginalObjects": {
             "Type": "Task",
             "Resource": "arn:aws:states:::aws-sdk:s3:listObjectsV2",
-            "Parameters": {
-              "Bucket.$": "$.params.bucket_name",
-              "Prefix.$": "$.partition.s3_path_prefix"
+            "Next": "DeleteObjects",
+            "QueryLanguage": "JSONata",
+            "Arguments": {
+              "Bucket": "{% $states.input.params.bucket_name %}",
+              "Prefix": "{% $states.input.partition.s3_path_prefix %}"
             },
-            "ResultSelector": {
-              "ListResult.$": "$.Contents"
+            "Assign": {
+              "ListResult": "{% $states.result %}"
             },
-            "ResultPath": "$.ListResult",
-            "Next": "CheckObjectsEmpty"
+            "Output": "{% $states.input %}"
           },
-          "CheckObjectsEmpty": {
-            "Type": "Choice",
-            "Choices": [
-              {
-                "Variable": "$.ListResult.ListResult[0]",
-                "IsPresent": true,
-                "Next": "DeleteObjectsCall"
-              }
-            ],
-            "Default": "InverseSwapJob"
-          },
-          "DeleteObjectsCall": {
+          "DeleteObjects": {
             "Type": "Task",
             "Resource": "arn:aws:states:::aws-sdk:s3:deleteObjects",
-            "Parameters": {
-              "Bucket.$": "$.params.bucket_name",
+            "Next": "InverseSwapJob",
+            "QueryLanguage": "JSONata",
+            "Arguments": {
+              "Bucket": "{% $states.input.params.bucket_name %}",
               "Delete": {
-                "Objects.$": "$.ListResult.ListResult"
+                "Objects": "{% [$ListResult.Contents.{\"Key\": Key}] %}"
               }
             },
-            "Next": "InverseSwapJob"
+            "Assign": {
+              "DeleteResult": "{% $states.result %}"
+            },
+            "Output": "{% $merge([$states.input, {\"Deleted\": $states.result.Deleted}]) %}"
           },
           "InverseSwapJob": {
             "Type": "Task",
             "Resource": "arn:aws:states:::glue:startJobRun.sync",
-            "Parameters": {
-              "JobName": "small_files_inverse_swap",
+            "Next": "Wait10Seconds",
+            "QueryLanguage": "JSONata",
+            "Arguments": {
+              "JobName": "small_files_inverse_swap_job",
               "Arguments": {
-                "--CONFIG_PAYLOAD.$": "States.JsonToString($)"
+                "--CONFIG_PAYLOAD": "{% $string({\"database_name\": $states.input.params.database_name, \"table_name\": $states.input.params.table_name, \"bucket_name\": $states.input.params.bucket_name, \"partitions\": [$states.input.partition]}) %}"
               }
             },
-            "Next": "Wait10Seconds"
+            "Output": "{% $states.input %}"
           },
           "Wait10Seconds": {
             "Type": "Wait",
             "Seconds": 10,
-            "Next": "DeleteStaging"
+            "Next": "ListStagingObjects"
           },
-          "DeleteStaging": {
+          "ListStagingObjects": {
             "Type": "Task",
             "Resource": "arn:aws:states:::aws-sdk:s3:listObjectsV2",
-            "Parameters": {
-              "Bucket.$": "$.params.bucket_name",
-              "Prefix.$": "$.partition.staging_s3_path_prefix"
+            "Next": "DeleteStagingObjects",
+            "QueryLanguage": "JSONata",
+            "Arguments": {
+              "Bucket": "{% $states.input.params.bucket_name %}",
+              "Prefix": "{% $states.input.partition.staging_s3_path_prefix %}"
             },
-            "ResultPath": "$.ListStagingResult",
-            "Next": "CheckStagingEmpty"
+            "Assign": {
+              "ListStagingResult": "{% $states.result %}"
+            },
+            "Output": "{% $states.input %}"
           },
-          "CheckStagingEmpty": {
-            "Type": "Choice",
-            "Choices": [
-              {
-                "Variable": "$.ListStagingResult.Contents[0]",
-                "IsPresent": true,
-                "Next": "DeleteStagingObjectsCall"
-              }
-            ],
-            "Default": "PartitionDone"
-          },
-          "DeleteStagingObjectsCall": {
+          "DeleteStagingObjects": {
             "Type": "Task",
             "Resource": "arn:aws:states:::aws-sdk:s3:deleteObjects",
-            "Parameters": {
-              "Bucket.$": "$.params.bucket_name",
+            "Next": "PartitionDone",
+            "QueryLanguage": "JSONata",
+            "Arguments": {
+              "Bucket": "{% $states.input.params.bucket_name %}",
               "Delete": {
-                "Objects.$": "$.ListStagingResult.Contents"
+                "Objects": "{% [$ListStagingResult.Contents.{\"Key\": Key}] %}"
               }
             },
-            "Next": "PartitionDone"
+            "Assign": {
+              "DeleteStagingResult": "{% $states.result %}"
+            },
+            "Output": "{% $merge([$states.input, {\"DeletedStaging\": $states.result.Deleted}]) %}"
           },
           "PartitionDone": {
             "Type": "Succeed"

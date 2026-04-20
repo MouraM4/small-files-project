@@ -13,3 +13,6 @@ aws glue update-partition \
             }
         }
     }'
+
+aws s3 rm s3://sot-layer/temp_resized_tables/my_test_tablemy_test_table/ --recursive
+
