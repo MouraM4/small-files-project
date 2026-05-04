@@ -1,0 +1,39 @@
+{
+  "PK": "NAMESPACE#namespace_1",
+  "SK": "TOOL#tool_1",
+  
+  "tool_id": "namespace_1_tool_1",
+  "namespace": "namespace_1",
+  "name": "tool_1",
+  "description": "Busca um usuário específico pelo ID...",
+  "type": "function",
+  
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "user_id": { "type": "string", "description": "ID único do usuário..." }
+    },
+    "required": ["user_id"],
+    "additionalProperties": false
+  },
+  "strict": true,
+
+  "execution_config": {
+    "base_url": "https://my-internal-api",
+    "path": "/users/{user_id}",
+    "method": "GET",
+    "headers": {
+      "x-itau-correlationID": "agent-tool-users"
+    },
+    "auth": {
+      "type": "bearer_token",
+      "secret_value": "<SECRET_VALUE>"
+    }
+  },
+
+  "metadata": {
+    "tags": ["users", "data", "interno"],
+    "owner_team": "squad-name",
+    "status": "ACTIVE"
+  }
+}
