@@ -2,8 +2,8 @@
   "PK": "NAMESPACE#namespace_1",
   "SK": "TOOL#tool_1",
   
-  "tool_id": "namespace_1_tool_1",
-  "namespace": "namespace_1",
+  "tool_id": "namespace_1_tool_1", # This could be the sort key
+  "namespace": "namespace_1", # This could be the partition key
   "name": "tool_1",
   "description": "Busca um usuário específico pelo ID...",
   "type": "function",
